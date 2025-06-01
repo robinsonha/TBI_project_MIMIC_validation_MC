@@ -1,2 +1,21 @@
 # TBI_project_MIMIC_validation_MC
-Processing of MIMIC-IV data and model redeployment for validation of TBI models
+# TBI_project_MC
+# Statistical and Machine Learning Analysis Repository
+
+This repository is private and contains R Markdown files for preprocessing of MIMIC-IV data and validation of models.
+
+## Repository Structure
+
+### Core Analysis Files
+- **`Combined analyses.Rmd`**: Integrated analysis combining multiple modeling approaches
+
+### Output Files
+- HTML renders of key analyses (`*.html` files)
+- **`table1.Rmd`**: Demographic/characteristics table generation
+
+## Usage
+
+1. **R Markdown Files**:
+   ```bash
+   Rscript -e "rmarkdown::render('Final spline analysis.Rmd')"
+   Rscript -e "rmarkdown::render('Combined analyses.Rmd')"
