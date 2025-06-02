@@ -7,7 +7,7 @@ This repository is private and contains R Markdown files for preprocessing of MI
 ## Repository Structure
 
 ### Core Analysis Files
-- **`Combined analyses.Rmd`**: Integrated analysis combining multiple modeling approaches
+- **`tbi_anticoag_pipeline.R`**: Integrated assembly of dataset ready for validation of TBI models
 
 ### Output Files
 - HTML renders of key analyses (`*.html` files)
