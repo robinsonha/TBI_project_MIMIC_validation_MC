@@ -2,7 +2,7 @@
 # TBI_project_MC
 # Statistical and Machine Learning Analysis Repository
 
-This repository is private and contains R Markdown files for preprocessing of MIMIC-IV data and validation of models.
+This repository is contains R Markdown files for preprocessing of MIMIC-IV data and validation of models.
 
 ## Repository Structure
 
