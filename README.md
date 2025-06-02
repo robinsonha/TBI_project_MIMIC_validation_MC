@@ -13,9 +13,7 @@ This repository is private and contains R Markdown files for preprocessing of MI
 - HTML renders of key analyses (`*.html` files)
 - **`table1.Rmd`**: Demographic/characteristics table generation
 
-## Usage
-
-1. **R Markdown Files**:
-   ```bash
-   Rscript -e "rmarkdown::render('Final spline analysis.Rmd')"
-   Rscript -e "rmarkdown::render('Combined analyses.Rmd')"
+## Dataset summary
+- Number of unique patients: 3822 
+- Number of unique admissions: 4029 
+- Total medication administration records: 21046 
