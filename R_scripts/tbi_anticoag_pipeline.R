@@ -143,7 +143,7 @@ presc_meds<-presc_meds %>%
 if(!is.null(emar_meds) && nrow(emar_meds) > 0){
   presc_meds <- rbind(presc_meds, emar_meds)
 }
-
+rm(emar_meds)
 # presc_meds$starttime<-as.POSIXct(presc_meds$starttime)
 
 
@@ -210,20 +210,21 @@ patient_meds$VTEPROPHYLAXISTYPE<-ifelse(patient_meds$lovenox==1,"Lovenox",patien
 patient_meds$VTEPROPHYLAXISTYPE<-ifelse(patient_meds$heparin==1,"Heparin",patient_meds$VTEPROPHYLAXISTYPE)
 
 # Merge
-cohort <- left_join(presc_meds, patient_meds)
-cohort$Anticoagulant_Therapy<-1
-cohort$VTEPROPHYLAXISTYPE<-NA
-cohort$VTEPROPHYLAXISTYPE<-ifelse(cohort$enoxaparin==1,"Enoxaparin",NA)
-cohort$VTEPROPHYLAXISTYPE<-ifelse(cohort$lovenox==1,"Lovenox",cohort$VTEPROPHYLAXISTYPE)
-cohort$VTEPROPHYLAXISTYPE<-ifelse(cohort$heparin==1,"Heparin",cohort$VTEPROPHYLAXISTYPE)
+presc_meds <- left_join(presc_meds, patient_meds)
+presc_meds$Anticoagulant_Therapy<-1
+presc_meds$VTEPROPHYLAXISTYPE<-NA
+presc_meds$VTEPROPHYLAXISTYPE<-ifelse(presc_meds$enoxaparin==1,"Enoxaparin",NA)
+presc_meds$VTEPROPHYLAXISTYPE<-ifelse(presc_meds$lovenox==1,"Lovenox",presc_meds$VTEPROPHYLAXISTYPE)
+presc_meds$VTEPROPHYLAXISTYPE<-ifelse(presc_meds$heparin==1,"Heparin",presc_meds$VTEPROPHYLAXISTYPE)
 
 
 # Save the updated cohort
-write.csv(cohort, "cohort_medications.csv", row.names = FALSE)
-saveRDS(cohort, "cohort_medications.rds")
+write.csv(presc_meds, "cohort_medications.csv", row.names = FALSE)
+saveRDS(presc_meds, "cohort_medications.rds")
 
 # Load admissions.csv
 admissions <- read_csv("admissions.csv")
+admissions<-admissions[admissions$hadm_id %in% cohort$hadm_id,]
 
 # Convert admittime and dischtime to datetime (if not already parsed)
 # Filter to stays of 1 month (<= 31 days)admissions <- admissions %>%
@@ -267,7 +268,7 @@ saveRDS(presc_meds_firstweek, "tbi_pats.rds")
 tbi_pats<-readRDS("tbi_pats.rds")
 
 # Load necessary tables (adjust filenames if needed)
-diagnoses_icd <- fread("diagnoses_icd.csv.gz")
+diagnoses_icd <- readRDS("diagnoses_icd.rds")
 diagnoses_icd_detail<-read.csv("d_icd_diagnoses.csv")
 diagnoses_icd<-diagnoses_icd[diagnoses_icd$subject_id %in% tbi_pats$subject_id,]
 diagnoses_icd<-dplyr::left_join(diagnoses_icd,diagnoses_icd_detail,by=c("icd_code","icd_version"))
@@ -305,7 +306,7 @@ thrombo_regex_flags <- full_join(pe_regex_flag, dvt_regex_flag, by = c("subject_
   )
 
 # HCPCS events
-hcpcs <- read_csv("hcpcsevents.csv")
+hcpcs <- fread("hcpcsevents.csv.gz")
 hcpcs_thrombo <- hcpcs %>%
   filter(hcpcs_cd %in% c("G8600", "G8599", "G9060")) %>%
   select(subject_id, hadm_id, thrombo_event_time = chartdate, hcpcs_cd) %>%
@@ -315,6 +316,8 @@ hcpcs_thrombo <- hcpcs %>%
 hcpcs_flags <- hcpcs_thrombo %>%
   distinct(subject_id, hadm_id) %>%
   mutate(thrombo_flag_hcpcs = 1)
+
+#This draws a blank- no indications in hcpcs
 
 # Merge all flags into TBI cohort
 tbi_pats <- tbi_pats %>%
@@ -353,11 +356,12 @@ overlap_summary <- tibble(
 )
 
 print(overlap_summary)
-# category only_icd only_text  both
-# <chr>       <int>     <int> <int>
-#   1 PE            482       603  5455
-# 2 DVT          3930       381  5008
-# 3 Thrombo      3503       860  9409
+# A tibble: 3 × 4
+#category only_icd only_text  both
+#<chr>       <int>     <int> <int>
+#  1 PE              1         2    46
+#2 DVT            55         7    55
+#3 Thrombo        43         8    95
 
 # Determine the Optimal Data Source
 
@@ -402,10 +406,9 @@ tbi_pats <- tbi_pats %>%
   left_join(bleeding_disorders, by = c("subject_id", "hadm_id"))
 
 
-
 # Pre-hospital Anticoagulation Use
 anticoag_list <- c("enoxaparin", "heparin", "lovenox")
-pre_hosp_anticoag <- tbi_medications %>%
+pre_hosp_anticoag <- presc_meds %>%
   filter(subject_id %in% tbi_pats$subject_id) %>%
   mutate(starttime = as_datetime(starttime)) %>%
   filter(str_detect(drug, regex(paste(anticoag_list, collapse = "|"), ignore_case = TRUE))) %>%
@@ -426,13 +429,15 @@ tbi_pats %>%
     n_unique_patients = n_distinct(subject_id),
     n_unique_admissions = n_distinct(hadm_id)
   )
+#  n_records n_unique_patients n_unique_admissions
+#1       560                49                  49
 
-# Patient age and gender
-#patients <- read_csv("patients.csv")
 
 # Select just the gender and anchor_age from patients
-demographics <- cohort %>%
-  select(subject_id, gender, anchor_age) %>%
+patients<-read.csv("patients.csv")
+patients<-patients[patients$subject_id %in% cohort$subject_id,]  
+demographics <- patients %>%
+  select(subject_id, gender, anchor_age,dod) %>%
   rename(age = anchor_age)
 
 # Merge into tbi_pats directly
@@ -448,7 +453,8 @@ tbi_pats <- tbi_pats %>%
 # Join admissions with patient death data
 event_resolution <- admissions %>%
   select(subject_id, hadm_id, dischtime) %>%
-  left_join(cohort %>% select(subject_id, dod), by = "subject_id") %>%
+  left_join(patients %>% select(subject_id, dod), by = "subject_id") %>%
+  left_join(admissions) %>%
   mutate(
     dischtime = as_datetime(dischtime),
     dod = as_datetime(dod),
@@ -480,15 +486,38 @@ missing_summary <- tbi_pats %>%
 # View top missing
 print(head(missing_summary, 20))
 
+# A tibble: 20 × 2
+#variable               percent_missing
+#<chr>                            <dbl>
+#  1 pre_hosp_anticoag_flag           97.3 
+#2 deathtime                        96.4 
+#3 thrombo_event_time               93.5 
+#4 thrombo_event_source             93.5 
+#5 bleeding_disorder_flag           88.0 
+#6 doses_per_24_hrs                 75.4 
+#7 prod_strength                    72.8 
+#8 dose_unit_rx                     72.8 
+#9 route                            72.8 
+#10 marital_status                   13.3 
+#11 edregtime                         5.78
+#12 edouttime                         5.78
+#13 discharge_location                3.95
+#14 subject_id                        0   
+#15 hadm_id                           0   
+#16 starttime                         0   
+#17 drug                              0   
+#18 enoxaparin                        0   
+#19 heparin                           0   
+#20 lovenox                           0 
 
 # Flag Critical Fields for Completeness
 
 
 # Check if any IDs missing core values
 tbi_pats %>%
-  filter(is.na(subject_id) | is.na(hadm_id) | is.na(admittime) | is.na(starttime)) %>%
+  filter(is.na(subject_id)| is.na(hadm_id) |is.na(admittime) | is.na(starttime)) %>%
   count()
-
+#0
 
 # Clean Flag Variables
 tbi_pats <- tbi_pats %>%
@@ -513,12 +542,12 @@ tbi_pats %>%
   filter(vte_start > dischtime) %>%
   count()
 
-
-# NOTE: A total of 1,833 records had anticoagulant therapy start times (vte_start) after the recorded hospital discharge (dischtime).
+# NOTE: A total of 37 records had anticoagulant therapy start times (vte_start) after the recorded hospital discharge (dischtime).
 # These records likely reflect data entry errors, post-discharge prescriptions, or misaligned admission-medication links.
 # They may be excluded from the primary analysis to ensure temporal consistency in evaluating in-hospital VTE prophylaxis initiation.
 
-# Flag them for reviewtbi_pats <- tbi_pats %>%
+# Flag them for review
+tbi_pats <- tbi_pats %>%
   mutate(vte_after_discharge_flag = if_else(vte_start > dischtime, 1, 0))
 
 # Exclude them entirely
@@ -547,7 +576,7 @@ tbi_pats %>%
   filter(!is.na(starttime) & starttime > dischtime) %>%
   count()
 
-## NOTE: A total of 5,593 records had medication administration times (starttime) occurring after the recorded hospital discharge (dischtime).
+## NOTE: A total of 35 records had medication administration times (starttime) occurring after the recorded hospital discharge (dischtime).
 # These may represent discharge prescriptions, outpatient events, or data inconsistencies.
 # Consider excluding them from in-hospital analyses to maintain accurate temporal alignment with the admission period.
 
