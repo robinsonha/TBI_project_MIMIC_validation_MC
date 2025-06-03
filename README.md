@@ -16,4 +16,7 @@ This repository is contains R Markdown files for preprocessing of MIMIC-IV data 
 ## Dataset summary
 - Number of unique patients: 3822 
 - Number of unique admissions: 4029 
-- Total medication administration records: 21046 
+- Total medication administration records: 21046
+
+## Most recent updates
+- Added ISS, comorbidity flags, CT and MRI dates, midline shift
