@@ -1,5 +1,7 @@
 
 # Load necessary libraries
+install.packages("devtools"); devtools::install_github("dajuntian/InjurySeverityScore")
+library(InjurySeverityScore)
 library(lubridate)
 library(dplyr)
 library(reticulate)#Allows python calls within R
@@ -34,6 +36,12 @@ tbi_patients <- diagnoses_icd %>%
       (icd_version == 10 & str_starts(icd_code, paste(tbi_icd_prefixes[10:14], collapse = "|")))
   ) %>%
   distinct(subject_id, hadm_id)
+
+diagnoses_pats<-diagnoses_icd[diagnoses_icd$subject_id %in% cohort$subject_id,] %>%
+  left_join(mindates) #Full patient history
+diagnoses_pats<-diagnoses_pats[diagnoses_pats$hadm_id<=diagnoses_pats$first_TBI_hadm_id,] #Currently includes conditions reported in the same encounter in Hx
+diagnoses_events<-diagnoses_icd[diagnoses_icd$hadm_id %in% cohort$hadm_id,]
+
 rm(diagnoses_icd)
 
 admissions<-readRDS("admissions.rds")
@@ -43,6 +51,27 @@ cohort <- tbi_patients %>%
   # Add any additional filters if needed (e.g., exclude newborns)
   filter(admission_type != "NEWBORN")
 rm(admissions)
+
+mindates<-cohort %>% #Slice out the first encounter for TBI
+  group_by(subject_id) %>%
+  arrange(hadm_id) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(c('subject_id','hadm_id'))
+names(mindates)[2]<-"first_TBI_hadm_id"
+
+diagnoses9<-diagnoses_events[diagnoses_events$icd_version==9,]
+diagnoses10<-diagnoses_events[diagnoses_events$icd_version==10,]
+diagnoses10$icd_code<-icd_map(diagnoses10$icd_code,from=10,to=9)
+diagnoses_events9<-rbind(diagnoses9,diagnoses10)
+
+iss_data <- diagnoses_events9[,c('hadm_id','icd_code')]
+
+iss<-injury_score(iss_data, hadm_id, icd_code, has_dot = F) #In MIMIC-IV the dots are missing from ICD codes
+head(iss)
+iss<- iss[,c('hadm_id','iss')]
+write.csv(iss,"ISS_scores.csv")
+cohort<-left_join(cohort,iss)
 
 # Summary statistics
 cat("Number of unique TBI patients:", n_distinct(cohort$subject_id), "\n")
@@ -251,6 +280,14 @@ presc_meds_with_admit <- presc_meds %>%
 presc_meds_firstweek <- presc_meds_with_admit %>%
   filter(starttime >= admittime & starttime <= admittime + days(7))
 
+presc_meds_firstweek  <- presc_meds_firstweek %>%
+  group_by(subject_id, hadm_id) %>%
+  summarise(
+    first_vte_time = min(starttime, na.rm = TRUE),
+    vte_type = first(VTEPROPHYLAXISTYPE),
+    .groups = "drop"
+  )
+
 # Get eligible subject/admission pairs
 eligible_subjects <- presc_meds_firstweek %>%
   distinct(subject_id, hadm_id)
@@ -435,7 +472,7 @@ tbi_pats %>%
 
 # Select just the gender and anchor_age from patients
 patients<-read.csv("patients.csv")
-patients<-patients[patients$subject_id %in% cohort$subject_id,]  
+patients<-patients[patients$subject_id %in% cohort$subject_id,]
 demographics <- patients %>%
   select(subject_id, gender, anchor_age,dod) %>%
   rename(age = anchor_age)
@@ -489,26 +526,26 @@ print(head(missing_summary, 20))
 # A tibble: 20 × 2
 #variable               percent_missing
 #<chr>                            <dbl>
-#  1 pre_hosp_anticoag_flag           97.3 
-#2 deathtime                        96.4 
-#3 thrombo_event_time               93.5 
-#4 thrombo_event_source             93.5 
-#5 bleeding_disorder_flag           88.0 
-#6 doses_per_24_hrs                 75.4 
-#7 prod_strength                    72.8 
-#8 dose_unit_rx                     72.8 
-#9 route                            72.8 
-#10 marital_status                   13.3 
+#  1 pre_hosp_anticoag_flag           97.3
+#2 deathtime                        96.4
+#3 thrombo_event_time               93.5
+#4 thrombo_event_source             93.5
+#5 bleeding_disorder_flag           88.0
+#6 doses_per_24_hrs                 75.4
+#7 prod_strength                    72.8
+#8 dose_unit_rx                     72.8
+#9 route                            72.8
+#10 marital_status                   13.3
 #11 edregtime                         5.78
 #12 edouttime                         5.78
 #13 discharge_location                3.95
-#14 subject_id                        0   
-#15 hadm_id                           0   
-#16 starttime                         0   
-#17 drug                              0   
-#18 enoxaparin                        0   
-#19 heparin                           0   
-#20 lovenox                           0 
+#14 subject_id                        0
+#15 hadm_id                           0
+#16 starttime                         0
+#17 drug                              0
+#18 enoxaparin                        0
+#19 heparin                           0
+#20 lovenox                           0
 
 # Flag Critical Fields for Completeness
 
@@ -554,8 +591,229 @@ tbi_pats <- tbi_pats %>%
   tbi_pats <- tbi_pats %>%
     filter(is.na(vte_start) | vte_start <= dischtime)
 
-saveRDS(tbi_pats, "tbi_pats_cleaned.rds")
-write.csv(tbi_pats, "tbi_pats_cleaned.csv", row.names = FALSE)
+
+#ADD GLASGOW COMA SCORE
+  # Define file paths and cohort hadm_ids
+  chartevents_file <- "chartevents.csv"
+  cohort_hadm_ids <- cohort$hadm_id  # Assuming cohort is already loaded in your environment
+
+
+  load_chartevents_filtered <- function(file_path, hadm_ids) {
+    hadm_id_col <- fread(file_path, select = "hadm_id", verbose = FALSE)
+    matching_rows <- which(hadm_id_col$hadm_id %in% hadm_ids)
+
+    # Now read only those specific rows with all columns
+    if (length(matching_rows) > 0) {
+      # Calculate skip and nrows parameters
+      # This works because fread's skip is 0-based
+      chart_data <- fread(
+        file_path,
+        skip = matching_rows[1] - 1,
+        nrows = length(matching_rows),
+        verbose = FALSE
+      )
+      # If matches aren't contiguous
+      if (!all(diff(matching_rows) == 1)) {
+        # Fall back to reading all rows but filtering (uses more memory)
+        chart_data <- fread(file_path, verbose = FALSE) %>%
+          filter(hadm_id %in% hadm_ids)
+      }
+
+      return(chart_data)
+    } else {
+      return(data.table())  # Return empty data.table if no matches
+    }
+  }
+  filtered_chartevents <- load_chartevents_filtered(chartevents_file, cohort_hadm_ids)
+  saveRDS(filtered_chartevents,"TBI_chartevents.rds")
+
+
+  rm(chartevents)
+
+  # identify the GCS components
+  gcs_components <- data.frame(
+    itemid = c(220739, 223900, 223901, 226756, 226757, 226758),
+    component = c(
+      "GCS - Verbal",
+      "GCS - Motor",
+      "GCS - Eyes",
+      "GCS - Verbal (ICU)",
+      "GCS - Motor (ICU)",
+      "GCS - Eyes (ICU)"
+    ),
+    stringsAsFactors = FALSE
+  )
+  c2<-unique(cohort[,c('hadm_id','starttime')])
+  # Filter chartevents for GCS components only
+  gcs_data <- filtered_chartevents %>%
+    filter(itemid %in% gcs_components$itemid) %>%
+    left_join(gcs_components, by = "itemid") %>%
+    left_join(c2) %>%
+    select(hadm_id, subject_id, charttime,starttime,itemid, component, valuenum, valueuom)
+  table(gcs_data$component)
+
+  # Reshape the data to combine components into one row per observation
+  gcs_scores <- gcs_data %>%
+    pivot_wider(
+      id_cols = c(hadm_id, subject_id, charttime, starttime),
+      names_from = component,
+      values_from = valuenum,
+      values_fn = first  # Takes the first value if there are duplicates
+    ) %>%
+    rowwise() %>%
+    mutate(
+      # Combine both regular and ICU versions of each component
+      gcs_verbal = `GCS - Verbal`,
+      gcs_motor = `GCS - Motor`,
+      gcs_eyes = `GCS - Eyes`,
+      # Calculate total GCS score (only when all components are present)
+      gcs_total = ifelse(
+        all(!is.na(c(gcs_eyes, gcs_verbal, gcs_motor))),
+        gcs_eyes + gcs_verbal + gcs_motor,
+        NA
+      ),
+      hours_since_admit = as.numeric(difftime(charttime, starttime, units = "hours"))
+    ) %>%
+    select(
+      hadm_id, subject_id, charttime,starttime, hours_since_admit,
+      gcs_eyes, gcs_verbal, gcs_motor, gcs_total
+    ) %>%
+    arrange(subject_id, charttime)
+
+  # Calculate required GCS metrics for each patient
+  gcs_metrics <- gcs_scores %>%
+    group_by(hadm_id, subject_id) %>%
+    summarise(
+      # First recorded GCS
+      first_gcs_time = first(charttime),
+      first_gcs_total = first(gcs_total, order_by = charttime),
+      first_gcs_eyes = first(gcs_eyes, order_by = charttime),
+      first_gcs_verbal = first(gcs_verbal, order_by = charttime),
+      first_gcs_motor = first(gcs_motor, order_by = charttime),
+
+      # Mean GCS between 24-36 hours
+      mean_24_36_gcs_total = mean(
+        gcs_total[hours_since_admit >= 24 & hours_since_admit <= 36],
+        na.rm = TRUE),
+      mean_24_36_gcs_eyes = mean(
+        gcs_eyes[hours_since_admit >= 24 & hours_since_admit <= 36],
+        na.rm = TRUE),
+      mean_24_36_gcs_verbal = mean(
+        gcs_verbal[hours_since_admit >= 24 & hours_since_admit <= 36],
+        na.rm = TRUE),
+      mean_24_36_gcs_motor = mean(
+        gcs_motor[hours_since_admit >= 24 & hours_since_admit <= 36],
+        na.rm = TRUE)
+    )  %>%
+    ungroup()
+
+  # Optional: Summary statistics
+  summary(gcs_scores$gcs_total)
+  #Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's
+  #  3.00    8.00   11.00   10.86   14.00   15.00    1109
+  names(gcs_scores)[3]<-"gcs_score_time"
+  gcs_scores<-gcs_scores %>%
+    group_by(hadm_id) %>%
+    arrange(gcs_score_time) %>%
+    slice(1) %>%
+    ungroup()
+
+  tbi_pats<-left_join(tbi_pats,gcs_scores)
+
+  #Checked to here:
+
+  # Load required MIMIC-IV tables (adjust paths as needed)
+  diagnoses_icd<-readRDS("diagnoses_icd.rds")
+  d_icd_diagnoses<-readRDS("d_icd_diagnoses.rds")
+  diagnoses_icd <- diagnoses_icd %>%
+    left_join(d_icd_diagnoses, by = c("icd_code", "icd_version"))
+  comorbidity_codes <- list(
+    smoking = c("Z72.0", "Z87.891", "F17.2", "F17.20", "F17.21", "F17.22",
+                "F17.29", "F17.20", "T65.2", "Z86.43", "Z57.31"),
+    ckd = c("N18", "N18.1", "N18.2", "N18.3", "N18.4", "N18.5", "N18.6",
+            "N18.9", "N19", "I12", "I13", "Z49", "Z49.0", "Z49.3", "Z99.2"),
+    stroke = c("I60", "I61", "I62", "I63", "I64", "I65", "I66", "G45", "G46"),
+    cancer_metastatic = c("C77", "C78", "C79", "C80"),
+    cirrhosis = c("K70", "K70.2", "K70.3", "K70.4", "K70.40", "K70.41",
+                  "K71.7", "K74", "K74.3", "K74.4", "K74.5", "K74.6",
+                  "K76.2", "K76.6", "K76.7"),
+    mi = c("I21", "I21.0", "I21.1", "I21.2", "I21.3", "I21.4", "I21.9", "I22"),
+    bleeding_disorder = c("D65", "D66", "D67", "D68", "D68.3", "D68.4", "D68.5")
+  )
+
+  # Create regex pattern for each comorbidity
+  comorbidity_patterns <- map(comorbidity_codes, ~paste0("^", .x, collapse = "|")) %>%
+    map(~paste0("(", .x, ")"))
+
+  # Filter diagnoses for cohort patients and identify comorbidities
+  comorbidities <- diagnoses_icd %>%
+    filter(subject_id %in% tbi_pats$subject_id) %>%
+    left_join(d_icd_diagnoses, by = "icd_code") %>%
+    mutate(
+      smoking = as.integer(str_detect(icd_code, comorbidity_patterns$smoking)),
+      ckd = as.integer(str_detect(icd_code, comorbidity_patterns$ckd)),
+      stroke = as.integer(str_detect(icd_code, comorbidity_patterns$stroke)),
+      cancer_metastatic = as.integer(str_detect(icd_code, comorbidity_patterns$cancer_metastatic)),
+      cirrhosis = as.integer(str_detect(icd_code, comorbidity_patterns$cirrhosis)),
+      mi = as.integer(str_detect(icd_code, comorbidity_patterns$mi)),
+      bleeding_disorder = as.integer(str_detect(icd_code, comorbidity_patterns$bleeding_disorder))
+    ) %>%
+    group_by(subject_id, hadm_id) %>%
+    summarize(
+      smoking = as.integer(any(smoking == 1)),
+      ckd = as.integer(any(ckd == 1)),
+      stroke = as.integer(any(stroke == 1)),
+      cancer_metastatic = as.integer(any(cancer_metastatic == 1)),
+      cirrhosis = as.integer(any(cirrhosis == 1)),
+      mi = as.integer(any(mi == 1)),
+      bleeding_disorder = as.integer(any(bleeding_disorder == 1)),
+      .groups = "drop"
+    )
+
+  # Create patient-level summary (ever had each condition)
+  patient_comorbidities <- comorbidities %>%
+    group_by(subject_id) %>%
+    summarize(across(-hadm_id, ~as.integer(any(.x == 1))))
+
+  # Join back with original cohort to ensure all patients are included
+  # Initialize all comorbidities as 0 (absent) first
+  cohort_with_comorbidities <- tbi_pats %>%
+    mutate(
+      smoking = 0L,
+      ckd = 0L,
+      stroke = 0L,
+      cancer_metastatic = 0L,
+      cirrhosis = 0L,
+      mi = 0L,
+      bleeding_disorder = 0L
+    ) %>%
+    rows_update(patient_comorbidities, by = "subject_id")
+
+  # Verify that all indicators are 0 or 1
+  stopifnot(all(cohort_with_comorbidities %>%
+                  select(smoking:bleeding_disorder) %>%
+                  unlist() %in% c(0L, 1L)))
+
+  # Count prevalence in cohort
+  comorbidity_counts <- cohort_with_comorbidities %>%
+    summarize(across(
+      c(smoking, ckd, stroke, cancer_metastatic, cirrhosis, mi, bleeding_disorder),
+      ~sum(.x, na.rm = TRUE))
+    ) %>%
+    pivot_longer(everything(), names_to = "comorbidity", values_to = "count") %>%
+    mutate(
+      total_patients = nrow(tbi_pats),
+      percent = round(count/total_patients*100, 1)
+    )
+
+  print(comorbidity_counts)
+    # View results
+    head(cohort_with_comorbidities)
+
+cohort_with_comorbidities<-unique(cohort_with_comorbidities)
+
+saveRDS(cohort_with_comorbidities, "tbi_pats_cleaned.rds")
+write.csv(cohort_with_comorbidities, "tbi_pats_cleaned.csv", row.names = FALSE)
 
 
 # EXTRA CODE
@@ -575,14 +833,55 @@ tbi_pats %>%
 tbi_pats %>%
   filter(!is.na(starttime) & starttime > dischtime) %>%
   count()
+tbi_pats<-unique(tbi_pats)
 
 ## NOTE: A total of 35 records had medication administration times (starttime) occurring after the recorded hospital discharge (dischtime).
 # These may represent discharge prescriptions, outpatient events, or data inconsistencies.
 # Consider excluding them from in-hospital analyses to maintain accurate temporal alignment with the admission period.
 
+noteevents <- read_csv("radiology.csv")
+
+# Filter for radiology notes in cohort
+radiology_notes <- noteevents[noteevents$hadm_id %in% cohort$hadm_id,] %>%
+  select(hadm_id, charttime, text)
+
+# Preprocess text fields
+radiology_notes <- radiology_notes %>%
+  mutate(
+    text_lower = tolower(text),
+    is_midline_shift = str_detect(text_lower, "midline shift"),
+    is_ct = str_detect(text_lower, "ct head"),
+    is_mri = str_detect(text_lower, "mri")
+  )
+
+# Summarize per hadm_id
+summary_df <- radiology_notes %>%
+  group_by(hadm_id) %>%
+  summarise(
+    midline_shift = any(is_midline_shift, na.rm = TRUE),
+    first_ct_time = min(charttime[is_ct], na.rm = TRUE),
+    first_mri_time = min(charttime[is_mri], na.rm = TRUE),
+    .groups = "drop"
+  )
+summary_df2<-summary_df
+summary_df2[]<- lapply(summary_df, function(x) {
+  if(is.numeric(x)) {
+    x[is.infinite(x)] <- NA
+  } else if(inherits(x, "POSIXt")) {
+    x[is.infinite(x)] <- as.POSIXct(NA)
+  }
+  x
+})
+# Merge with cohort to preserve full list
+tbi_pats <- tbi_pats %>%
+  left_join(summary_df2, by = "hadm_id") %>%
+  mutate(
+    midline_shift = ifelse(is.na(midline_shift), FALSE, midline_shift)
+  )
+
 # Summary statistics of extracted TBI cohort
 
-tbi_pats <- readRDS("tbi_pats_cleaned.rds")
+#tbi_pats <- read.csv("tbi_pats_cleaned.csv")
 
 # Basic patient counts
 n_patients <- n_distinct(tbi_pats$subject_id)
