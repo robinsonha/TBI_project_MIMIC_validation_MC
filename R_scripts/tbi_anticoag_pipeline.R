@@ -350,9 +350,41 @@ hcpcs_thrombo <- hcpcs %>%
   distinct() %>%
   mutate(thrombo_flag_hcpcs = 1)
 
-hcpcs_flags <- hcpcs_thrombo %>%
-  distinct(subject_id, hadm_id) %>%
-  mutate(thrombo_flag_hcpcs = 1)
+hcpcs_thrombo <- hcpcs %>%
+  filter(hcpcs_cd %in% c(
+    # VTE quality indicators
+    "G8599",  # VTE occurred
+    "G8600",  # No VTE occurred
+    
+    # Procedure codes that may indicate DVT/PE treatment
+    "37187",  # Percutaneous transluminal mechanical thrombectomy, vein
+    "37188",  # ...with add-ons
+    "37190",  # Insertion of vena cava filter
+    "37191",  # Repositioning of vena cava filter
+    "37192",  # Conversion of non-tunneled to tunneled central venous catheter
+    "37212",  # Transcatheter therapy for DVT
+    "37213",  # ...with add-ons
+    "37214",  # Transcatheter therapy for PE
+    "37215",  # ...with add-ons
+    "37216",  # Intravascular ultrasound for DVT/PE
+    "37217",  # ...with add-ons
+    "37218",  # Intravascular ultrasound during DVT/PE intervention
+    "75820",  # Venography for DVT
+    "75822",  # Venography for PE
+    "78456",  # Ventilation/perfusion lung scan for PE
+    "71275"   # CT angiography for PE
+  )) %>%
+  mutate(
+    # Categorize the type of event based on code
+    thrombo_type = case_when(
+      hcpcs_cd %in% c("G8599") ~ "VTE_unspecified",
+      hcpcs_cd %in% c("37187", "37188", "37190", "37191", "37192", 
+                      "37212", "37213", "75820") ~ "DVT",
+      hcpcs_cd %in% c("37214", "37215", "75822", "78456", "71275") ~ "PE",
+      TRUE ~ "other"
+    )
+  ) %>%
+  select(subject_id, hadm_id, thrombo_event_time = chartdate, hcpcs_cd, thrombo_type)
 
 #This draws a blank- no indications in hcpcs
 
